@@ -1,0 +1,27 @@
+# Apenas para desenvolvimento local: estas credenciais não são segredos.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: payflow
+      POSTGRES_PASSWORD: payflow
+      POSTGRES_DB: ledger
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payflow -d ledger"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ledger-api:
+    build: ./services/ledger
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Ledger: Host=postgres;Database=ledger;Username=payflow;Password=payflow
+      Database__MigrateOnStartup: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy

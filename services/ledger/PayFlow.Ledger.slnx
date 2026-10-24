@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PayFlow.Ledger.Domain/PayFlow.Ledger.Domain.csproj" />
+    <Project Path="src/PayFlow.Ledger.Application/PayFlow.Ledger.Application.csproj" />
+    <Project Path="src/PayFlow.Ledger.Infrastructure/PayFlow.Ledger.Infrastructure.csproj" />
+    <Project Path="src/PayFlow.Ledger.Api/PayFlow.Ledger.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PayFlow.Ledger.UnitTests/PayFlow.Ledger.UnitTests.csproj" />
+    <Project Path="tests/PayFlow.Ledger.IntegrationTests/PayFlow.Ledger.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

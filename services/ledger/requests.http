@@ -1,0 +1,31 @@
+@baseUrl = http://localhost:8080
+
+### Abrir conta (copie o id retornado para @source / @destination)
+POST {{baseUrl}}/accounts
+Content-Type: application/json
+
+{ "ownerName": "Maria Silva", "currency": "BRL" }
+
+###
+@source = 00000000-0000-0000-0000-000000000000
+@destination = 00000000-0000-0000-0000-000000000000
+
+### Depositar R$ 100,00 (envie duas vezes: a segunda resposta é um replay)
+POST {{baseUrl}}/accounts/{{source}}/deposits
+Content-Type: application/json
+Idempotency-Key: deposit-001
+
+{ "amount": 10000 }
+
+### Transferir R$ 25,00
+POST {{baseUrl}}/transfers
+Content-Type: application/json
+Idempotency-Key: transfer-001
+
+{ "sourceAccountId": "{{source}}", "destinationAccountId": "{{destination}}", "amount": 2500 }
+
+### Saldo
+GET {{baseUrl}}/accounts/{{source}}
+
+### Extrato
+GET {{baseUrl}}/accounts/{{source}}/statement?page=1&pageSize=20

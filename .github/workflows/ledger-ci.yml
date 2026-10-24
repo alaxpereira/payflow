@@ -1,0 +1,32 @@
+name: ledger
+
+on:
+  push:
+    branches: [main]
+    paths: ["services/ledger/**", ".github/workflows/ledger-ci.yml"]
+  pull_request:
+    paths: ["services/ledger/**", ".github/workflows/ledger-ci.yml"]
+
+defaults:
+  run:
+    working-directory: services/ledger
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: services/ledger/global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      # Os testes de integração usam Testcontainers; os runners Ubuntu do GitHub já têm Docker.
+      - name: Test
+        run: dotnet test --configuration Release --no-build --collect:"XPlat Code Coverage"
