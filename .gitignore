@@ -8,3 +8,8 @@ obj/
 TestResults/
 *.swp
 .DS_Store
+
+# Go
+services/processor/processor
+services/processor/processor.exe
+coverage.out

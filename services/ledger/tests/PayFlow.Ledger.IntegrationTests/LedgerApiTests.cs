@@ -1,5 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using PayFlow.Ledger.Infrastructure.Messaging;
+using RabbitMQ.Client;
 
 namespace PayFlow.Ledger.IntegrationTests;
 
@@ -85,6 +89,44 @@ public class LedgerApiTests(LedgerApiFactory factory)
         Assert.Equal(20_000, (await GetAccountAsync(a.Id)).Balance + (await GetAccountAsync(b.Id)).Balance);
     }
 
+    [Fact]
+    public async Task Transacao_concluida_e_publicada_no_rabbitmq_pelo_relay()
+    {
+        await using var connection = await new ConnectionFactory { Uri = new Uri(factory.RabbitMqUri) }.CreateConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+        await EventTopology.DeclareAsync(channel, CancellationToken.None);
+        var queue = (await channel.QueueDeclareAsync()).QueueName;
+        await channel.QueueBindAsync(queue, EventTopology.Exchange, "ledger.transaction_completed");
+
+        var account = await OpenAccountAsync();
+        var deposit = await PostWithKeyAsync($"/accounts/{account.Id}/deposits", new { amount = 4_200 }, NewKey());
+        var transaction = (await deposit.Content.ReadFromJsonAsync<TransactionDto>())!;
+
+        // Outros testes também geram eventos; procura o desta transação.
+        var message = await WaitForMessageAsync(channel, queue, body => body.Contains(transaction.Id.ToString()));
+
+        Assert.Equal("TransactionCompleted", message.BasicProperties.Type);
+        Assert.True(Guid.TryParse(message.BasicProperties.MessageId, out _));
+        var payload = JsonDocument.Parse(message.Body).RootElement;
+        Assert.Equal("Deposit", payload.GetProperty("kind").GetString());
+        Assert.Equal(4_200, payload.GetProperty("amount").GetInt64());
+    }
+
+    private static async Task<BasicGetResult> WaitForMessageAsync(IChannel channel, string queue, Func<string, bool> match)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            var message = await channel.BasicGetAsync(queue, autoAck: true);
+            if (message is null)
+                await Task.Delay(100);
+            else if (match(Encoding.UTF8.GetString(message.Body.Span)))
+                return message;
+        }
+
+        throw new TimeoutException("A mensagem não foi publicada em 15 segundos.");
+    }
+
     private static string NewKey() => Guid.NewGuid().ToString();
 
     private async Task<AccountDto> OpenAccountAsync()
@@ -105,4 +147,6 @@ public class LedgerApiTests(LedgerApiFactory factory)
     }
 
     private sealed record AccountDto(Guid Id, long Balance);
+
+    private sealed record TransactionDto(Guid Id);
 }

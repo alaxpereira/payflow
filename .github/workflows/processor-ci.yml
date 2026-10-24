@@ -1,0 +1,36 @@
+name: processor
+
+on:
+  push:
+    branches: [main]
+    paths: ["services/processor/**", ".github/workflows/processor-ci.yml"]
+  pull_request:
+    paths: ["services/processor/**", ".github/workflows/processor-ci.yml"]
+
+defaults:
+  run:
+    working-directory: services/processor
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/processor/go.mod
+          cache-dependency-path: services/processor/go.sum
+
+      - name: Verificar formatação
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+      - name: Vet
+        run: go vet -tags integration ./...
+
+      - name: Build
+        run: go build ./...
+
+      # Inclui os testes de integração (Testcontainers); os runners Ubuntu do GitHub já têm Docker.
+      - name: Test
+        run: go test -race -tags integration -coverprofile=coverage.out ./...
