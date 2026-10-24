@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/alaxpereira/payflow/services/processor/internal/settlement"
 )
 
@@ -48,7 +50,11 @@ func NewServer(addr string, store Store, log *slog.Logger) *http.Server {
 		writeJSON(w, http.StatusOK, map[string]any{"date": date.Format(time.DateOnly), "settlements": settlements})
 	})
 
-	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	handler := otelhttp.NewHandler(mux, "processor",
+		otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != "/health" }),
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return r.Method + " " + r.URL.Path }))
+
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

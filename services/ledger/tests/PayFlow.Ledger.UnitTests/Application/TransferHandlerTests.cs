@@ -4,18 +4,21 @@ using PayFlow.Ledger.Domain;
 
 namespace PayFlow.Ledger.UnitTests.Application;
 
-public class TransferHandlerTests
+public sealed class TransferHandlerTests : IDisposable
 {
     private static readonly DateTimeOffset Now = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
 
     private readonly InMemoryLedger _ledger = new();
+    private readonly MetricsRecorder _metrics = new();
     private readonly TransferHandler _handler;
 
     public TransferHandlerTests()
     {
-        var runner = new IdempotentTransactionRunner(_ledger, _ledger, _ledger);
+        var runner = new IdempotentTransactionRunner(_ledger, _ledger, _ledger, _metrics.Metrics);
         _handler = new TransferHandler(runner, new FixedTimeProvider(Now));
     }
+
+    public void Dispose() => _metrics.Dispose();
 
     [Fact]
     public async Task Executa_a_transferencia_e_salva()
@@ -43,6 +46,8 @@ public class TransferHandlerTests
         Assert.True(retry.Value.WasReplayed);
         Assert.Equal(first.Value.Value.Id, retry.Value.Value.Id);
         Assert.Equal(4_000, source.Balance);
+        Assert.Equal(1, _metrics.Total("payflow.ledger.transactions"));
+        Assert.Equal(1, _metrics.Total("payflow.ledger.idempotent_replays"));
         Assert.Single(_ledger.Transactions);
     }
 
@@ -56,6 +61,7 @@ public class TransferHandlerTests
 
         Assert.Equal(LedgerErrors.IdempotencyKeyReused, reused.Error);
         Assert.Equal(4_000, source.Balance);
+        Assert.Equal(0, _metrics.Total("payflow.ledger.idempotent_replays"));
     }
 
     [Fact]

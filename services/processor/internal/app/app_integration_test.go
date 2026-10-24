@@ -17,6 +17,11 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/alaxpereira/payflow/services/processor/internal/messaging"
 )
@@ -25,6 +30,11 @@ import (
 func TestProcessor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+
+	// Guarda os spans em memória para conferir a propagação do trace.
+	spans := tracetest.NewSpanRecorder()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	pg, err := tcpostgres.Run(ctx, "postgres:17-alpine",
 		tcpostgres.WithDatabase("processor"),
@@ -92,9 +102,10 @@ func TestProcessor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	publish := func(messageID, body string) {
+	publishWithHeaders := func(messageID, body string, headers amqp.Table) {
 		t.Helper()
 		err := ch.PublishWithContext(ctx, messaging.Exchange, topology.RoutingKey, false, false, amqp.Publishing{
+			Headers:     headers,
 			MessageId:   messageID,
 			Type:        "TransactionCompleted",
 			ContentType: "application/json",
@@ -104,6 +115,7 @@ func TestProcessor(t *testing.T) {
 			t.Fatalf("publicando: %v", err)
 		}
 	}
+	publish := func(messageID, body string) { publishWithHeaders(messageID, body, nil) }
 
 	t.Run("consolida transacoes e ignora entrega duplicada", func(t *testing.T) {
 		publish("msg-1", event("0192d6a1-7c3e-7a10-8000-000000000001", "Deposit", 10_000, "2026-10-24T10:00:00Z"))
@@ -118,6 +130,44 @@ func TestProcessor(t *testing.T) {
 		s := settlementsOf(t, baseURL, "2026-10-24")
 		if s[0].TotalAmount != 15_000 || s[0].Kind != "Deposit" || s[0].Currency != "BRL" {
 			t.Errorf("consolidado inesperado: %+v", s[0])
+		}
+	})
+
+	t.Run("continua o trace que veio no header traceparent", func(t *testing.T) {
+		const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+		const parentSpanID = "00f067aa0ba902b7"
+
+		publishWithHeaders("msg-trace",
+			event("0192d6a1-7c3e-7a10-8000-000000000010", "Transfer", 700, "2026-10-26T10:00:00Z"),
+			amqp.Table{"traceparent": "00-" + traceID + "-" + parentSpanID + "-01"})
+
+		var consumer sdktrace.ReadOnlySpan
+		waitUntil(t, 15*time.Second, func() bool {
+			for _, span := range spans.Ended() {
+				if span.SpanKind() == trace.SpanKindConsumer && span.SpanContext().TraceID().String() == traceID {
+					consumer = span
+					return true
+				}
+			}
+			return false
+		})
+
+		if got := consumer.Parent().SpanID().String(); got != parentSpanID {
+			t.Errorf("span de consumo deveria ser filho de %s, veio %s", parentSpanID, got)
+		}
+		if consumer.Name() != topology.Queue+" process" {
+			t.Errorf("nome do span = %q", consumer.Name())
+		}
+
+		// As queries ao banco aparecem como filhas do span de consumo, no mesmo trace.
+		var dbSpans int
+		for _, span := range spans.Ended() {
+			if span.Parent().SpanID() == consumer.SpanContext().SpanID() && span.SpanKind() == trace.SpanKindClient {
+				dbSpans++
+			}
+		}
+		if dbSpans == 0 {
+			t.Error("esperado ao menos um span de query do banco filho do span de consumo")
 		}
 	})
 

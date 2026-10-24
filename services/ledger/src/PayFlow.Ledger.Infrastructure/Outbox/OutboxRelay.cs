@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using PayFlow.Ledger.Application.Telemetry;
 using PayFlow.Ledger.Infrastructure.Messaging;
 using PayFlow.Ledger.Infrastructure.Persistence;
 using RabbitMQ.Client;
@@ -19,6 +21,7 @@ internal sealed class OutboxRelay(
     IServiceScopeFactory scopeFactory,
     RabbitMqConnection rabbitMq,
     IOptions<OutboxRelayOptions> options,
+    LedgerMetrics metrics,
     TimeProvider clock,
     ILogger<OutboxRelay> logger) : BackgroundService
 {
@@ -87,7 +90,10 @@ internal sealed class OutboxRelay(
             foreach (var message in batch)
             {
                 await PublishAsync(channel, message, ct);
-                message.MarkPublished(clock.GetUtcNow());
+
+                var now = clock.GetUtcNow();
+                message.MarkPublished(now);
+                metrics.OutboxPublished(message.Type, now - message.OccurredAt);
                 published++;
             }
         }
@@ -95,6 +101,7 @@ internal sealed class OutboxRelay(
         {
             // Grava o que já foi publicado e registra a falha; a mensagem que falhou volta no próximo lote.
             batch[published].MarkFailed(ex);
+            metrics.OutboxPublishFailed();
             await db.SaveChangesAsync(CancellationToken.None);
             await transaction.CommitAsync(CancellationToken.None);
             throw;
@@ -108,6 +115,18 @@ internal sealed class OutboxRelay(
 
     private static async Task PublishAsync(IChannel channel, OutboxMessage message, CancellationToken ct)
     {
+        var routingKey = EventTopology.RoutingKeyFor(message.Type);
+
+        // O span de publicação é filho do span da requisição que gravou o evento, mesmo rodando segundos depois.
+        ActivityContext.TryParse(message.TraceParent, traceState: null, out var parent);
+        using var activity = LedgerTelemetry.ActivitySource.StartActivity(
+            $"{EventTopology.Exchange} publish", ActivityKind.Producer, parent);
+        activity?.SetTag("messaging.system", "rabbitmq");
+        activity?.SetTag("messaging.operation.type", "send");
+        activity?.SetTag("messaging.destination.name", EventTopology.Exchange);
+        activity?.SetTag("messaging.rabbitmq.destination.routing_key", routingKey);
+        activity?.SetTag("messaging.message.id", message.Id.ToString());
+
         var properties = new BasicProperties
         {
             MessageId = message.Id.ToString(),
@@ -115,15 +134,30 @@ internal sealed class OutboxRelay(
             ContentType = "application/json",
             DeliveryMode = DeliveryModes.Persistent,
             Timestamp = new AmqpTimestamp(message.OccurredAt.ToUnixTimeSeconds()),
+            Headers = new Dictionary<string, object?>(),
         };
 
-        await channel.BasicPublishAsync(
-            EventTopology.Exchange,
-            EventTopology.RoutingKeyFor(message.Type),
-            mandatory: false,
-            properties,
-            Encoding.UTF8.GetBytes(message.Payload),
-            ct);
+        // Sem listener de traces (ex.: telemetria desligada) não há span, mas o contexto original segue adiante
+        // para o processor continuar o mesmo trace.
+        var traceParent = activity?.Id ?? message.TraceParent;
+        if (traceParent is not null)
+            properties.Headers["traceparent"] = traceParent;
+
+        try
+        {
+            await channel.BasicPublishAsync(
+                EventTopology.Exchange,
+                routingKey,
+                mandatory: false,
+                properties,
+                Encoding.UTF8.GetBytes(message.Payload),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
     }
 
     /// <summary>Backoff exponencial: 1s, 2s, 4s... limitado a <paramref name="max"/>.</summary>

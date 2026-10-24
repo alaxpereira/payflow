@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using PayFlow.Ledger.Application.Accounts;
+using PayFlow.Ledger.Application.Telemetry;
 using PayFlow.Ledger.Application.Transactions;
 
 namespace PayFlow.Ledger.Application;
@@ -8,6 +9,7 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
+        services.AddSingleton<LedgerMetrics>();
         services.AddScoped<OpenAccountHandler>();
         services.AddScoped<GetAccountHandler>();
         services.AddScoped<GetStatementHandler>();

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -110,6 +111,33 @@ public class LedgerApiTests(LedgerApiFactory factory)
         var payload = JsonDocument.Parse(message.Body).RootElement;
         Assert.Equal("Deposit", payload.GetProperty("kind").GetString());
         Assert.Equal(4_200, payload.GetProperty("amount").GetInt64());
+    }
+
+    [Fact]
+    public async Task Trace_da_requisicao_atravessa_o_outbox_ate_o_header_da_mensagem()
+    {
+        await using var connection = await new ConnectionFactory { Uri = new Uri(factory.RabbitMqUri) }.CreateConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+        await EventTopology.DeclareAsync(channel, CancellationToken.None);
+        var queue = (await channel.QueueDeclareAsync()).QueueName;
+        await channel.QueueBindAsync(queue, EventTopology.Exchange, "ledger.transaction_completed");
+
+        var account = await OpenAccountAsync();
+        var traceId = ActivityTraceId.CreateRandom().ToHexString();
+        var request = new HttpRequestMessage(HttpMethod.Post, $"/accounts/{account.Id}/deposits")
+        {
+            Content = JsonContent.Create(new { amount = 100 }),
+        };
+        request.Headers.Add("Idempotency-Key", NewKey());
+        request.Headers.Add("traceparent", $"00-{traceId}-{ActivitySpanId.CreateRandom().ToHexString()}-01");
+        var transaction = (await (await _client.SendAsync(request)).Content.ReadFromJsonAsync<TransactionDto>())!;
+
+        var message = await WaitForMessageAsync(channel, queue, body => body.Contains(transaction.Id.ToString()));
+
+        var headers = message.BasicProperties.Headers;
+        Assert.NotNull(headers);
+        var traceParent = Encoding.UTF8.GetString((byte[])headers["traceparent"]!);
+        Assert.Equal(traceId, traceParent.Split('-')[1]);
     }
 
     private static async Task<BasicGetResult> WaitForMessageAsync(IChannel channel, string queue, Func<string, bool> match)

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using PayFlow.Ledger.Application.Abstractions;
+using PayFlow.Ledger.Application.Telemetry;
 using PayFlow.Ledger.Domain;
 using PayFlow.Ledger.Domain.Common;
 
@@ -11,9 +13,36 @@ namespace PayFlow.Ledger.Application.Transactions;
 public sealed class IdempotentTransactionRunner(
     IAccountRepository accounts,
     ILedgerTransactionRepository transactions,
-    IUnitOfWork unitOfWork)
+    IUnitOfWork unitOfWork,
+    LedgerMetrics metrics)
 {
     public async Task<Result<IdempotentResult<TransactionResponse>>> RunAsync(
+        string idempotencyKey,
+        string requestHash,
+        IReadOnlyCollection<Guid> accountIds,
+        Func<IReadOnlyList<Account>, Result<LedgerTransaction>> execute,
+        CancellationToken ct)
+    {
+        var result = await ExecuteAsync(idempotencyKey, requestHash, accountIds, execute, ct);
+        if (result.IsSuccess)
+            Record(result.Value);
+        return result;
+    }
+
+    // Registrado só depois do commit: uma transação revertida não pode aparecer nas métricas.
+    private void Record(IdempotentResult<TransactionResponse> result)
+    {
+        var transaction = result.Value;
+        Activity.Current?.SetTag("payflow.transaction.id", transaction.Id);
+        Activity.Current?.SetTag("payflow.idempotent_replay", result.WasReplayed);
+
+        if (result.WasReplayed)
+            metrics.IdempotentReplay();
+        else
+            metrics.TransactionCompleted(transaction.Kind, transaction.Currency);
+    }
+
+    private async Task<Result<IdempotentResult<TransactionResponse>>> ExecuteAsync(
         string idempotencyKey,
         string requestHash,
         IReadOnlyCollection<Guid> accountIds,
