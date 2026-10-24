@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using PayFlow.Ledger.Domain.Common;
@@ -11,7 +12,11 @@ namespace PayFlow.Ledger.Infrastructure.Outbox;
 /// </summary>
 internal sealed class DomainEventsToOutboxInterceptor : SaveChangesInterceptor
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    // Enums como texto ("Transfer"), não como número: o payload é um contrato lido por outros serviços.
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {

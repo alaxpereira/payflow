@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\PayFlow.Ledger.Application\PayFlow.Ledger.Application.csproj" />
+    <ProjectReference Include="..\..\src\PayFlow.Ledger.Infrastructure\PayFlow.Ledger.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

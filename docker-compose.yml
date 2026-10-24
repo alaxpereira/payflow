@@ -8,11 +8,28 @@ services:
       POSTGRES_DB: ledger
     ports:
       - "5432:5432"
+    volumes:
+      # Cria o banco do processor na primeira inicialização. Cada serviço tem o seu banco.
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U payflow -d ledger"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: payflow
+      RABBITMQ_DEFAULT_PASS: payflow
+    ports:
+      - "5672:5672"
+      - "15672:15672" # painel de gerenciamento: http://localhost:15672
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   ledger-api:
     build: ./services/ledger
@@ -20,8 +37,26 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Ledger: Host=postgres;Database=ledger;Username=payflow;Password=payflow
       Database__MigrateOnStartup: "true"
+      RabbitMq__Uri: amqp://payflow:payflow@rabbitmq:5672
+      Outbox__Relay__Enabled: "true"
     ports:
       - "8080:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  processor:
+    build: ./services/processor
+    environment:
+      PROCESSOR_DATABASE_URL: postgres://payflow:payflow@postgres:5432/processor?sslmode=disable
+      PROCESSOR_RABBITMQ_URL: amqp://payflow:payflow@rabbitmq:5672
+      PROCESSOR_HTTP_ADDR: ":8081"
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy

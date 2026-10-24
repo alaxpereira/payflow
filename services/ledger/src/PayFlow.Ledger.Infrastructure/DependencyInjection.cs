@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PayFlow.Ledger.Application.Abstractions;
+using PayFlow.Ledger.Infrastructure.Messaging;
 using PayFlow.Ledger.Infrastructure.Outbox;
 using PayFlow.Ledger.Infrastructure.Persistence;
 
@@ -31,6 +32,11 @@ public static class DependencyInjection
         services.AddScoped<ILedgerTransactionRepository, LedgerTransactionRepository>();
         services.AddScoped<IStatementReader, StatementReader>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+        services.AddOptions<RabbitMqOptions>().BindConfiguration(RabbitMqOptions.SectionName);
+        services.AddOptions<OutboxRelayOptions>().BindConfiguration(OutboxRelayOptions.SectionName);
+        services.AddSingleton<RabbitMqConnection>();
+        services.AddHostedService<OutboxRelay>();
         return services;
     }
 }

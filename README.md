@@ -12,16 +12,23 @@ confiável.
 ```mermaid
 flowchart LR
     client([Cliente]) -->|HTTP + Idempotency-Key| ledger[Ledger API<br/>.NET 10]
-    ledger -->|SELECT ... FOR UPDATE| pg[(PostgreSQL)]
-    ledger -->|linhas de outbox, mesma transação| pg
-    pg -. Fase 2: relay do outbox .-> mq{{RabbitMQ}}
-    mq -. Fase 2 .-> processor[Processor<br/>Go]
+    ledger -->|SELECT ... FOR UPDATE| ldb[(PostgreSQL<br/>ledger)]
+    ledger -->|outbox, mesma transação| ldb
+    relay[Relay do outbox] -->|FOR UPDATE SKIP LOCKED| ldb
+    relay -->|publisher confirms| mq{{RabbitMQ}}
+    mq -->|ack manual| processor[Processor<br/>Go]
+    mq -.->|retentativas 1s/10s/60s| mq
+    mq -.->|falhas definitivas| dlq[(DLQ)]
+    processor -->|inbox + consolidado| pdb[(PostgreSQL<br/>processor)]
 ```
 
 | Serviço | Linguagem | Responsabilidade | Status |
 |---|---|---|---|
-| `services/ledger` | C# / .NET 10 | Contas, saldos, livro-razão em partida dobrada, depósitos e transferências | Fase 1 ✅ |
-| `services/processor` | Go | Consumo de eventos, conciliação, liquidação | Fase 2 |
+| `services/ledger` | C# / .NET 10 | Contas, saldos, livro-razão em partida dobrada, depósitos, transferências e relay do outbox | Fases 1 e 2 ✅ |
+| `services/processor` | Go | Consome eventos e mantém o consolidado diário por moeda e tipo de transação | Fase 2 ✅ |
+
+O fluxo de mensagens, as garantias de entrega e o contrato dos eventos estão em
+[`docs/mensageria.md`](docs/mensageria.md).
 
 ## Principais decisões de design
 
@@ -36,33 +43,50 @@ flowchart LR
   depois de um timeout nunca cobra duas vezes. Reutilizar a chave com outro payload é rejeitado (`409`). Uma
   requisição repetida devolve o resultado original com `Idempotent-Replayed: true`.
 - **Transactional outbox.** Um interceptor do EF Core converte eventos de domínio em linhas de `outbox_messages`
-  durante o `SaveChanges`, de forma atômica com a mudança de negócio. A Fase 2 adiciona o relay que publica esses
-  eventos.
+  durante o `SaveChanges`, de forma atômica com a mudança de negócio. Um relay em background publica essas linhas no
+  RabbitMQ com *publisher confirms* e `FOR UPDATE SKIP LOCKED`, então várias instâncias da API podem rodar o relay
+  sem publicar a mesma mensagem duas vezes no mesmo instante.
+- **At-least-once na entrega, exatamente uma vez no efeito.** O relay e o RabbitMQ podem entregar uma mensagem mais
+  de uma vez. O processor usa o padrão *inbox*: grava o `message_id` e atualiza o consolidado no mesmo commit, então
+  uma entrega duplicada não muda nada.
+- **Retentativas sem bloquear a fila.** Erros transitórios voltam com backoff (1s → 10s → 60s) através de uma fila
+  de espera por atraso. Erros permanentes, como um payload inválido, vão direto para a DLQ com o motivo nos headers.
+  Uma *alternate exchange* guarda eventos que ainda não têm nenhum consumidor, em vez de descartá-los.
 - **Clean Architecture sem cerimônia.** Domain → Application → Infrastructure → API, com um tipo `Result` simples
   para falhas de negócio esperadas (em vez de exceções) e handlers como classes comuns (sem biblioteca de mediator).
 
 ## Rodando localmente
 
-Requisitos: .NET 10 SDK e Docker.
+Requisito: Docker. Para rodar os testes fora do Docker, também .NET 10 SDK e Go 1.27.
 
 ```bash
 docker compose up --build
 ```
 
-A API sobe em `http://localhost:8080`. Teste as requisições em
-[`services/ledger/requests.http`](services/ledger/requests.http), ou abra o documento OpenAPI em `/openapi/v1.json`
-rodando em Development.
+| Serviço | Endereço |
+|---|---|
+| Ledger API | `http://localhost:8080` (OpenAPI em `/openapi/v1.json`) |
+| Processor | `http://localhost:8081/settlements?date=AAAA-MM-DD` |
+| Painel do RabbitMQ | `http://localhost:15672` (usuário e senha `payflow`) |
+
+Teste as requisições em [`services/ledger/requests.http`](services/ledger/requests.http). Depois de um depósito ou
+transferência, o consolidado do dia aparece no processor em cerca de um segundo.
 
 ### Testes
 
 ```bash
 cd services/ledger
 dotnet test
+
+cd services/processor
+go test ./...                     # unitários
+go test -tags integration ./...   # integração (exige Docker)
 ```
 
-- **Testes unitários** cobrem as regras de domínio e o fluxo de idempotência.
-- **Testes de integração** sobem a API real contra um PostgreSQL em container (Testcontainers), incluindo um teste
-  que dispara transferências simultâneas contra a mesma conta e garante que ela nunca fica negativa. Exigem Docker.
+- **Testes unitários** cobrem as regras de domínio, o fluxo de idempotência e a política de retentativas.
+- **Testes de integração** sobem os serviços reais contra PostgreSQL e RabbitMQ em containers (Testcontainers):
+  transferências simultâneas que nunca deixam a conta negativa, o relay publicando no RabbitMQ, o processor
+  ignorando entregas duplicadas e mandando mensagens inválidas para a DLQ.
 
 ## API
 
@@ -78,6 +102,6 @@ dotnet test
 ## Roadmap
 
 - [x] **Fase 1** – Ledger API: contas, depósitos, transferências, idempotência, locks, outbox, testes, CI
-- [ ] **Fase 2** – Relay do outbox + RabbitMQ + processor em Go (retentativas com backoff, dead-letter queue)
+- [x] **Fase 2** – Relay do outbox + RabbitMQ + processor em Go (retentativas com backoff, dead-letter queue)
 - [ ] **Fase 3** – Observabilidade: traces com OpenTelemetry atravessando C# → fila → Go, dashboards no Grafana
 - [ ] **Fase 4** – Deploy em nuvem e teste de carga com k6 (resultados publicados)

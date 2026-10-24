@@ -62,6 +62,7 @@ internal sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outb
         builder.HasKey(m => m.Id);
         builder.Property(m => m.Type).HasMaxLength(200);
         builder.Property(m => m.Payload).HasColumnType("jsonb");
+        builder.Property(m => m.Error).HasMaxLength(OutboxMessage.MaxErrorLength);
 
         // O relay só varre mensagens não processadas, em ordem.
         builder.HasIndex(m => m.OccurredAt).HasFilter("processed_at IS NULL");
