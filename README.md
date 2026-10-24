@@ -2,6 +2,7 @@
 
 [![ledger](https://github.com/alaxpereira/payflow/actions/workflows/ledger-ci.yml/badge.svg)](https://github.com/alaxpereira/payflow/actions/workflows/ledger-ci.yml)
 [![processor](https://github.com/alaxpereira/payflow/actions/workflows/processor-ci.yml/badge.svg)](https://github.com/alaxpereira/payflow/actions/workflows/processor-ci.yml)
+[![e2e](https://github.com/alaxpereira/payflow/actions/workflows/e2e.yml/badge.svg)](https://github.com/alaxpereira/payflow/actions/workflows/e2e.yml)
 ![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
 ![Go 1.27](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)
 [![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)](LICENSE)
@@ -26,6 +27,8 @@ flowchart LR
     mq -.->|retentativas 1s/10s/60s| mq
     mq -.->|falhas definitivas| dlq[(DLQ)]
     processor -->|inbox + consolidado| pdb[(PostgreSQL<br/>processor)]
+    ledger -.->|OTLP| obs[Jaeger + Prometheus<br/>+ Grafana]
+    processor -.->|OTLP| obs
 ```
 
 | Serviço | Linguagem | Responsabilidade | Status |
@@ -34,7 +37,8 @@ flowchart LR
 | `services/processor` | Go | Consome eventos e mantém o consolidado diário por moeda e tipo de transação | Fase 2 ✅ |
 
 O fluxo de mensagens, as garantias de entrega e o contrato dos eventos estão em
-[`docs/mensageria.md`](docs/mensageria.md).
+[`docs/mensageria.md`](docs/mensageria.md). Traces, métricas e dashboards estão em
+[`docs/observabilidade.md`](docs/observabilidade.md).
 
 ## Principais decisões de design
 
@@ -58,6 +62,9 @@ O fluxo de mensagens, as garantias de entrega e o contrato dos eventos estão em
 - **Retentativas sem bloquear a fila.** Erros transitórios voltam com backoff (1s → 10s → 60s) através de uma fila
   de espera por atraso. Erros permanentes, como um payload inválido, vão direto para a DLQ com o motivo nos headers.
   Uma *alternate exchange* guarda eventos que ainda não têm nenhum consumidor, em vez de descartá-los.
+- **Um trace do HTTP ao consolidado.** O `traceparent` da requisição é gravado na linha do outbox, então o trace
+  continua mesmo com a publicação acontecendo depois de a requisição terminar. Ele segue no header AMQP até o
+  processor em Go. No Jaeger, uma transferência aparece como um único trace com spans dos dois serviços.
 - **Clean Architecture sem cerimônia.** Domain → Application → Infrastructure → API, com um tipo `Result` simples
   para falhas de negócio esperadas (em vez de exceções) e handlers como classes comuns (sem biblioteca de mediator).
 
@@ -74,6 +81,8 @@ docker compose up --build
 | Ledger API | `http://localhost:8080` (OpenAPI em `/openapi/v1.json`) |
 | Processor | `http://localhost:8081/settlements?date=AAAA-MM-DD` |
 | Painel do RabbitMQ | `http://localhost:15672` (usuário e senha `payflow`) |
+| Grafana (dashboard PayFlow) | `http://localhost:3000` |
+| Jaeger (traces) | `http://localhost:16686` |
 
 Teste as requisições em [`services/ledger/requests.http`](services/ledger/requests.http). Depois de um depósito ou
 transferência, o consolidado do dia aparece no processor em cerca de um segundo.
@@ -109,5 +118,5 @@ go test -tags integration ./...   # integração (exige Docker)
 
 - [x] **Fase 1** – Ledger API: contas, depósitos, transferências, idempotência, locks, outbox, testes, CI
 - [x] **Fase 2** – Relay do outbox + RabbitMQ + processor em Go (retentativas com backoff, dead-letter queue)
-- [ ] **Fase 3** – Observabilidade: traces com OpenTelemetry atravessando C# → fila → Go, dashboards no Grafana
+- [x] **Fase 3** – Observabilidade: traces com OpenTelemetry atravessando C# → fila → Go, dashboards no Grafana
 - [ ] **Fase 4** – Deploy em nuvem e teste de carga com k6 (resultados publicados)

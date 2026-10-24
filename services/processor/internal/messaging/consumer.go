@@ -8,7 +8,14 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
+
+const instrumentationName = "github.com/alaxpereira/payflow/services/processor/internal/messaging"
 
 const (
 	retryCountHeader = "x-retry-count"
@@ -28,11 +35,39 @@ type ConsumerOptions struct {
 
 // Consumer consome a fila principal com ack manual e reconecta sozinho quando a conexão cai.
 type Consumer struct {
-	url      string
-	topology Topology
-	handle   HandlerFunc
-	opts     ConsumerOptions
-	log      *slog.Logger
+	url       string
+	topology  Topology
+	handle    HandlerFunc
+	opts      ConsumerOptions
+	log       *slog.Logger
+	telemetry consumerTelemetry
+}
+
+type consumerTelemetry struct {
+	tracer   trace.Tracer
+	messages metric.Int64Counter
+	duration metric.Float64Histogram
+}
+
+func newConsumerTelemetry() consumerTelemetry {
+	meter := otel.Meter(instrumentationName)
+
+	// Erros aqui só acontecem com nomes inválidos; o SDK devolve um instrumento que não faz nada.
+	messages, err := meter.Int64Counter("payflow.processor.messages",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Mensagens processadas, por resultado (processed, retried, dead_lettered)."))
+	if err != nil {
+		otel.Handle(err)
+	}
+	duration, err := meter.Float64Histogram("payflow.processor.processing_duration",
+		metric.WithUnit("s"),
+		metric.WithDescription("Tempo de processamento de uma mensagem."),
+		metric.WithExplicitBucketBoundaries(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 5))
+	if err != nil {
+		otel.Handle(err)
+	}
+
+	return consumerTelemetry{tracer: otel.Tracer(instrumentationName), messages: messages, duration: duration}
 }
 
 func NewConsumer(url string, topology Topology, handle HandlerFunc, opts ConsumerOptions, log *slog.Logger) *Consumer {
@@ -45,7 +80,7 @@ func NewConsumer(url string, topology Topology, handle HandlerFunc, opts Consume
 	if opts.MaxReconnect <= 0 {
 		opts.MaxReconnect = 30 * time.Second
 	}
-	return &Consumer{url: url, topology: topology, handle: handle, opts: opts, log: log}
+	return &Consumer{url: url, topology: topology, handle: handle, opts: opts, log: log, telemetry: newConsumerTelemetry()}
 }
 
 // Run consome até ctx ser cancelado. Mensagens em processamento no momento do cancelamento ficam sem ack e o
@@ -122,14 +157,39 @@ func (c *Consumer) consume(ctx context.Context) (connected bool, err error) {
 }
 
 func (c *Consumer) process(ctx context.Context, ch *amqp.Channel, d amqp.Delivery) {
+	started := time.Now()
 	retries := retryCount(d.Headers)
-	log := c.log.With("message_id", d.MessageId, "type", d.Type, "retries", retries)
+
+	// Continua o trace que veio do ledger no header traceparent.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, headerCarrier(d.Headers))
+	ctx, span := c.telemetry.tracer.Start(ctx, c.topology.Queue+" process",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "rabbitmq"),
+			attribute.String("messaging.operation.type", "process"),
+			attribute.String("messaging.destination.name", c.topology.Queue),
+			attribute.String("messaging.message.id", d.MessageId),
+			attribute.Int("messaging.rabbitmq.retry_count", retries),
+		))
+	defer span.End()
+
+	log := c.log.With("message_id", d.MessageId, "type", d.Type, "retries", retries,
+		"trace_id", span.SpanContext().TraceID().String())
 
 	handlerCtx, cancel := context.WithTimeout(ctx, c.opts.HandlerTimeout)
 	err := c.handle(handlerCtx, d)
 	cancel()
 
 	decision := c.topology.Retry.Decide(err, retries)
+	outcome := attribute.String("outcome", decision.Action.Outcome())
+	span.SetAttributes(outcome)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	c.telemetry.messages.Add(ctx, 1, metric.WithAttributes(outcome))
+	c.telemetry.duration.Record(ctx, time.Since(started).Seconds(), metric.WithAttributes(outcome))
+
 	switch decision.Action {
 	case ActionAck:
 		ack(log, d)
@@ -168,6 +228,8 @@ func republish(ctx context.Context, ch *amqp.Channel, d amqp.Delivery, queue str
 	}
 	headers[retryCountHeader] = int32(retries)
 	headers[lastErrorHeader] = truncate(cause.Error(), maxErrorLength)
+	// A próxima tentativa vira filha desta no trace, então todas as tentativas aparecem juntas.
+	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
 
 	confirmation, err := ch.PublishWithDeferredConfirmWithContext(publishCtx, "", queue, false, false, amqp.Publishing{
 		Headers:      headers,

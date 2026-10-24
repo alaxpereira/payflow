@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
@@ -40,6 +41,9 @@ internal sealed class DomainEventsToOutboxInterceptor : SaveChangesInterceptor
             .Where(aggregate => aggregate.DomainEvents.Count > 0)
             .ToList();
 
+        // Durante o SaveChanges, Activity.Current é o span da requisição HTTP que causou a mudança.
+        var traceParent = Activity.Current is { IdFormat: ActivityIdFormat.W3C } activity ? activity.Id : null;
+
         foreach (var aggregate in aggregates)
         {
             foreach (var domainEvent in aggregate.DomainEvents)
@@ -50,6 +54,7 @@ internal sealed class DomainEventsToOutboxInterceptor : SaveChangesInterceptor
                     Type = domainEvent.GetType().Name,
                     Payload = JsonSerializer.Serialize(domainEvent, domainEvent.GetType(), JsonOptions),
                     OccurredAt = domainEvent.OccurredAt,
+                    TraceParent = traceParent,
                 });
             }
 

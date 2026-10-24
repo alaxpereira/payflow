@@ -34,6 +34,19 @@ func (a Action) String() string {
 	return "desconhecida"
 }
 
+// Outcome é o rótulo da ação nas métricas e traces.
+func (a Action) Outcome() string {
+	switch a {
+	case ActionAck:
+		return "processed"
+	case ActionRetry:
+		return "retried"
+	case ActionDeadLetter:
+		return "dead_lettered"
+	}
+	return "unknown"
+}
+
 // Decision diz o que fazer com uma mensagem depois de processada.
 type Decision struct {
 	Action Action

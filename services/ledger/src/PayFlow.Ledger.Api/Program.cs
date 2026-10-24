@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using PayFlow.Ledger.Api.Endpoints;
+using PayFlow.Ledger.Api.Telemetry;
 using PayFlow.Ledger.Application;
 using PayFlow.Ledger.Infrastructure;
 using PayFlow.Ledger.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddTelemetry();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();

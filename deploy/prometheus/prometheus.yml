@@ -1,0 +1,14 @@
+# Os serviços enviam métricas por OTLP (push) para /api/v1/otlp/v1/metrics; não há scrape.
+# O label "job" vem do service.name de cada serviço (payflow-ledger, payflow-processor).
+global:
+  evaluation_interval: 15s
+
+otlp:
+  # Vira label em todas as séries, para filtrar por serviço nos dashboards.
+  promote_resource_attributes:
+    - service.name
+
+storage:
+  tsdb:
+    # Métricas por push podem chegar um pouco fora de ordem.
+    out_of_order_time_window: 30m
