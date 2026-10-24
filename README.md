@@ -1,5 +1,11 @@
 # PayFlow
 
+[![ledger](https://github.com/alaxpereira/payflow/actions/workflows/ledger-ci.yml/badge.svg)](https://github.com/alaxpereira/payflow/actions/workflows/ledger-ci.yml)
+[![processor](https://github.com/alaxpereira/payflow/actions/workflows/processor-ci.yml/badge.svg)](https://github.com/alaxpereira/payflow/actions/workflows/processor-ci.yml)
+![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
+![Go 1.27](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)
+[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)](LICENSE)
+
 Uma plataforma de pagamentos simplificada, construída como um conjunto de serviços poliglotas (**C# / .NET** e
 **Go**), com foco nas partes difíceis de movimentar dinheiro: consistência, idempotência, concorrência e mensageria
 confiável.
