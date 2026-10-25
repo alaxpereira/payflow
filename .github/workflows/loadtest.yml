@@ -23,6 +23,8 @@ jobs:
       RATE: ${{ inputs.rate || '100' }}
       DURATION: ${{ inputs.duration || '2m' }}
       RESULTS_DIR: loadtest/results
+      # Em PRs, github.sha é o commit temporário de merge; o que interessa é o commit da branch.
+      COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +47,7 @@ jobs:
             echo "|---|---|"
             echo "| Máquina | GitHub Actions \`ubuntu-latest\`, $(nproc) vCPUs, $(free -g | awk '/Mem:/ {print $2}') GB de RAM |"
             echo "| Topologia | Todos os containers (bancos, RabbitMQ, serviços, observabilidade) **e o próprio k6** na mesma máquina |"
-            echo "| Commit | \`${GITHUB_SHA::7}\` |"
+            echo "| Commit | \`${COMMIT_SHA::7}\` |"
             echo "| Data | $(date -u '+%Y-%m-%d %H:%M UTC') |"
             echo
           } > "$RESULTS_DIR/environment.md"

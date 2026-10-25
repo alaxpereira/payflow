@@ -40,6 +40,13 @@ O fluxo de mensagens, as garantias de entrega e o contrato dos eventos estão em
 [`docs/mensageria.md`](docs/mensageria.md). Traces, métricas e dashboards estão em
 [`docs/observabilidade.md`](docs/observabilidade.md).
 
+### Sob carga
+
+A **100 transferências/s** (mais retentativas e um cenário de contenção nas mesmas contas), o p95 fica em
+**55 ms** com tudo rodando numa máquina de 4 vCPUs. Depois da carga, os bancos são conferidos: o dinheiro é
+conservado até o centavo, nenhuma conta fica negativa e o consolidado do processor bate com o ledger, sem
+duplicatas. Números completos e como reproduzir em [`docs/benchmark.md`](docs/benchmark.md).
+
 ## Principais decisões de design
 
 - **Dinheiro como inteiro em centavos** (`long`). Nada de ponto flutuante perto de um saldo.
@@ -119,4 +126,5 @@ go test -tags integration ./...   # integração (exige Docker)
 - [x] **Fase 1** – Ledger API: contas, depósitos, transferências, idempotência, locks, outbox, testes, CI
 - [x] **Fase 2** – Relay do outbox + RabbitMQ + processor em Go (retentativas com backoff, dead-letter queue)
 - [x] **Fase 3** – Observabilidade: traces com OpenTelemetry atravessando C# → fila → Go, dashboards no Grafana
-- [ ] **Fase 4** – Deploy em nuvem e teste de carga com k6 (resultados publicados)
+- [x] **Fase 4a** – Teste de carga com k6 no CI, com verificação de consistência ([resultados](docs/benchmark.md))
+- [ ] **Fase 4b** – Deploy na Oracle Cloud (configuração e guia prontos em [`deploy/oracle`](deploy/oracle/README.md))
