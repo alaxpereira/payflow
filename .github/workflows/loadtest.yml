@@ -1,0 +1,82 @@
+name: loadtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      rate:
+        description: Transferências por segundo no patamar
+        default: "100"
+      duration:
+        description: Duração do patamar (ex. 2m, 5m)
+        default: "2m"
+  pull_request:
+    paths:
+      - "loadtest/**"
+      - "scripts/loadtest-verify.sh"
+      - ".github/workflows/loadtest.yml"
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RATE: ${{ inputs.rate || '100' }}
+      DURATION: ${{ inputs.duration || '2m' }}
+      RESULTS_DIR: loadtest/results
+      # Em PRs, github.sha é o commit temporário de merge; o que interessa é o commit da branch.
+      COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Subir a stack
+        run: docker compose up -d --build
+
+      - name: Esperar os serviços
+        run: |
+          for url in http://localhost:8080/health http://localhost:8081/health; do
+            timeout 120 bash -c "until curl -fsS $url >/dev/null; do sleep 2; done"
+          done
+
+      - name: Registrar a máquina
+        run: |
+          mkdir -p "$RESULTS_DIR" && chmod 777 "$RESULTS_DIR"
+          {
+            echo "### Ambiente"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Máquina | GitHub Actions \`ubuntu-latest\`, $(nproc) vCPUs, $(free -g | awk '/Mem:/ {print $2}') GB de RAM |"
+            echo "| Topologia | Todos os containers (bancos, RabbitMQ, serviços, observabilidade) **e o próprio k6** na mesma máquina |"
+            echo "| Commit | \`${COMMIT_SHA::7}\` |"
+            echo "| Data | $(date -u '+%Y-%m-%d %H:%M UTC') |"
+            echo
+          } > "$RESULTS_DIR/environment.md"
+
+      - name: Teste de carga (k6)
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/loadtest:/loadtest" \
+            -e LEDGER_URL=http://localhost:8080 -e RATE -e DURATION -e RESULTS_DIR=/loadtest/results \
+            grafana/k6:2.3.0 run /loadtest/transfers.js
+
+      - name: Verificar consistência
+        if: ${{ !cancelled() }}
+        run: bash scripts/loadtest-verify.sh
+
+      - name: Resumo
+        if: ${{ !cancelled() }}
+        run: cat "$RESULTS_DIR"/environment.md "$RESULTS_DIR"/k6-summary.md "$RESULTS_DIR"/consistency.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: loadtest-results
+          path: loadtest/results/
+
+      - name: Logs dos serviços
+        if: failure()
+        run: docker compose logs --no-color --tail=200 ledger-api processor
+
+      - name: Derrubar a stack
+        if: always()
+        run: docker compose down -v

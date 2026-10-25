@@ -140,6 +140,22 @@ public class LedgerApiTests(LedgerApiFactory factory)
         Assert.Equal(traceId, traceParent.Split('-')[1]);
     }
 
+    [Fact]
+    public async Task Limite_por_ip_responde_429_quando_estoura_e_nao_afeta_o_health()
+    {
+        using var limited = factory.WithWebHostBuilder(b => b.UseSetting("RateLimiting:PermitsPerMinute", "3"));
+        using var client = limited.CreateClient();
+        var missing = $"/accounts/{Guid.NewGuid()}";
+
+        var statuses = new List<HttpStatusCode>();
+        for (var i = 0; i < 4; i++)
+            statuses.Add((await client.GetAsync(missing)).StatusCode);
+        var health = await client.GetAsync("/health");
+
+        Assert.Equal([HttpStatusCode.NotFound, HttpStatusCode.NotFound, HttpStatusCode.NotFound, HttpStatusCode.TooManyRequests], statuses);
+        Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+    }
+
     private static async Task<BasicGetResult> WaitForMessageAsync(IChannel channel, string queue, Func<string, bool> match)
     {
         var deadline = DateTime.UtcNow.AddSeconds(15);

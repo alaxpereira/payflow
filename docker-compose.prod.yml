@@ -1,0 +1,94 @@
+# Produção: sobrepõe o docker-compose.yml.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Só o Caddy fica exposto (80/443, com HTTPS automático); bancos, RabbitMQ e serviços conversam pela rede interna.
+# Senhas e domínio vêm do arquivo .env (modelo em deploy/oracle/.env.example). Guia: deploy/oracle/README.md.
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  rabbitmq:
+    <<: *restart
+    ports: !reset []
+    environment:
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD no .env}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+
+  ledger-api:
+    <<: *restart
+    ports: !reset []
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # A API só é alcançável pelo Caddy, então dá para confiar no X-Forwarded-For que ele envia.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      RateLimiting__PermitsPerMinute: ${API_RATE_LIMIT_PER_MINUTE:-120}
+      ConnectionStrings__Ledger: Host=postgres;Database=ledger;Username=payflow;Password=${POSTGRES_PASSWORD}
+      RabbitMq__Uri: amqp://payflow:${RABBITMQ_PASSWORD}@rabbitmq:5672
+
+  processor:
+    <<: *restart
+    ports: !reset []
+    environment:
+      PROCESSOR_DATABASE_URL: postgres://payflow:${POSTGRES_PASSWORD}@postgres:5432/processor?sslmode=disable
+      PROCESSOR_RABBITMQ_URL: amqp://payflow:${RABBITMQ_PASSWORD}@rabbitmq:5672
+
+  jaeger:
+    <<: *restart
+    ports: !reset []
+
+  prometheus:
+    <<: *restart
+    ports: !reset []
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - prometheus-data:/prometheus
+
+  grafana:
+    <<: *restart
+    ports: !reset []
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      GF_SERVER_ROOT_URL: https://grafana.${DOMAIN}
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+  caddy:
+    <<: *restart
+    image: caddy:2.11.7-alpine
+    environment:
+      DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
+      ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - ledger-api
+      - processor
+      - grafana
+      - jaeger
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  prometheus-data:
+  grafana-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,28 @@
+#cloud-config
+# Cole este arquivo no campo "Cloud-init script" ao criar a VM (Ubuntu 24.04).
+# Instala o Docker, libera as portas 80 e 443 no firewall da própria VM e clona o projeto em /opt/payflow.
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+
+runcmd:
+  # Docker pelo repositório oficial (o pacote do Ubuntu pode vir com um Compose antigo demais).
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - usermod -aG docker ubuntu
+
+  # As imagens Ubuntu da Oracle trazem regras de iptables que bloqueiam tudo além da porta 22,
+  # mesmo com a porta liberada na Security List da nuvem.
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+  - netfilter-persistent save
+
+  - git clone https://github.com/alaxpereira/payflow.git /opt/payflow
+  - chown -R ubuntu:ubuntu /opt/payflow
