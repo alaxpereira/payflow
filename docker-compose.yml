@@ -19,6 +19,9 @@ services:
 
   rabbitmq:
     image: rabbitmq:4-management-alpine
+    # Roda direto como o usuário do RabbitMQ. Sem isso, no Docker Desktop (Windows) o .erlang.cookie pode ser
+    # criado como root no volume e o broker não consegue lê-lo (erro eacces na inicialização).
+    user: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: payflow
       RABBITMQ_DEFAULT_PASS: payflow
