@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PayFlow.Ledger.Api.Endpoints;
+using PayFlow.Ledger.Api.Security;
 using PayFlow.Ledger.Api.Telemetry;
 using PayFlow.Ledger.Application;
 using PayFlow.Ledger.Infrastructure;
@@ -14,11 +15,13 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure();
 builder.Services.AddHealthChecks().AddDbContextCheck<LedgerDbContext>();
+builder.Services.AddPerIpRateLimiting();
 
 var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseRateLimiter();
 
 if (app.Environment.IsDevelopment())
     app.MapOpenApi();

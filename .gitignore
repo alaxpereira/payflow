@@ -14,3 +14,4 @@ services/processor/processor
 services/processor/processor.exe
 coverage.out
 loadtest/results/
+.env

@@ -1,0 +1,25 @@
+# Um subdomínio por serviço, todos com certificado da Let's Encrypt emitido automaticamente.
+# Com DOMAIN=129.146.10.20.sslip.io, a API fica em https://api.129.146.10.20.sslip.io, e assim por diante.
+{
+	email {$ACME_EMAIL}
+}
+
+api.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy ledger-api:8080
+}
+
+processor.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy processor:8081
+}
+
+grafana.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy grafana:3000
+}
+
+jaeger.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy jaeger:16686
+}
